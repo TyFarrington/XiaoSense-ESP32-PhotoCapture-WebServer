@@ -2,6 +2,8 @@
 
 A complete photo capture system for the XIAO ESP32S3 Sense board with web server interface for viewing, managing, and downloading images. All images are saved as JPEG files to SD card with support for multiple pixel formats (RGB, Grayscale, RGB565).
 
+![Browser Interface](data capture/browser.jpg)
+
 ## Features
 
 - **Multiple Capture Methods**: Button (D0), serial command, or web interface
