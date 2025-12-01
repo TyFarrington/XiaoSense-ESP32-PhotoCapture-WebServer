@@ -27,8 +27,8 @@
 
 #define SD_CS_PIN         21
 
-const char* ssid = "YOUR_WIFI_NETWORK_NAME";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "LowHangingFruit";
+const char* password = "FatHangingFruit";
 
 WebServer server(80);
 camera_config_t config;
@@ -36,10 +36,15 @@ camera_config_t config;
 bool sdCardPresent = false;
 bool wifiConnected = false;
 
+bool burstInProgress = false;
+int burstCurrent = 0;
+int burstTotal = 0;
+
 int currentQuality = 12;
 framesize_t currentFrameSize = FRAMESIZE_VGA;
 pixformat_t currentPixelFormat = PIXFORMAT_JPEG;
 bool currentBigEndian = false;
+int settingsMenuState = 0; // 0 = main menu, 1 = resolution, 2 = quality, 3 = color format, 4 = endianness
 
 
 bool initCamera();
@@ -60,6 +65,13 @@ void handleSetResolution();
 void handleSetPixelFormat();
 void handleSetEndianness();
 void handleGetSettings();
+void handleBurstCapture();
+void handleBurstStatus();
+void showSettingsMenu();
+void showResolutionMenu();
+void showColorFormatMenu();
+void showEndiannessMenu();
+void showMainMenu();
 
 void setup() {
   Serial.begin(115200);
@@ -117,14 +129,63 @@ void setup() {
   }
   
   Serial.println("\nReady to capture images!");
+  showMainMenu();
+}
+
+void showSettingsMenu() {
+  Serial.println("\n=== Settings Menu ===");
+  Serial.println("1 - Resolution");
+  Serial.println("2 - JPEG Quality");
+  Serial.println("3 - Color Format");
+  Serial.println("4 - Endianness");
+  Serial.println("c - Take a new photo and continue");
+  Serial.print("Select option: ");
+  Serial.flush();
+}
+
+void showResolutionMenu() {
+  Serial.println("\n=== Resolution ===");
+  Serial.println("0 - QQVGA (96x96 / 160x120)");
+  Serial.println("1 - QCIF (176x144)");
+  Serial.println("2 - QVGA (240x240 / 320x240)");
+  Serial.println("3 - VGA (640x480)");
+  Serial.println("4 - SVGA (800x600)");
+  Serial.println("5 - XGA (1024x768)");
+  Serial.println("6 - SXGA (1280x1024)");
+  Serial.println("7 - UXGA (1600x1200)");
+  Serial.print("Select resolution: ");
+  Serial.flush();
+}
+
+void showColorFormatMenu() {
+  Serial.println("\n=== Color Format ===");
+  Serial.println("0 - RGB (JPEG)");
+  Serial.println("1 - Grayscale");
+  Serial.println("2 - RGB565");
+  Serial.print("Select format: ");
+  Serial.flush();
+}
+
+void showEndiannessMenu() {
+  Serial.println("\n=== Endianness ===");
+  Serial.println("1 - Little Endian");
+  Serial.println("2 - Big Endian");
+  Serial.print("Select endianness: ");
+  Serial.flush();
+}
+
+void showMainMenu() {
   Serial.println("\n=== Serial Commands ===");
   Serial.println("c - Capture image");
+  Serial.println("b - Burst capture (50 photos at 0.2s intervals)");
+  Serial.println("s - Settings menu");
   Serial.println("l - List all images");
   Serial.println("d - Delete all images");
   Serial.println("h - Show help");
   if (wifiConnected) {
     Serial.printf("w - Web interface: http://%s\n", WiFi.localIP().toString().c_str());
   }
+  Serial.flush();
 }
 
 void loop() {
@@ -149,28 +210,205 @@ void loop() {
   lastButtonState = currentButtonState;
   
   if (Serial.available()) {
-    char command = Serial.read();
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.length() == 0) return;
+    
+    char command = input.charAt(0);
+    
+    // Handle settings menu navigation
+    if (settingsMenuState > 0) {
+      if (command == 'c' || command == 'C') {
+        // Take a photo and continue in settings menu
+        captureImage();
+        Serial.println();
+        showSettingsMenu();
+        return;
+      }
+      
+      if (settingsMenuState == 1) { // Resolution selection
+        int choice = input.toInt();
+        if (choice >= 0 && choice <= 7) {
+          framesize_t newSize;
+          switch(choice) {
+            case 0: newSize = FRAMESIZE_QQVGA; break;
+            case 1: newSize = FRAMESIZE_QCIF; break;
+            case 2: newSize = FRAMESIZE_QVGA; break;
+            case 3: newSize = FRAMESIZE_VGA; break;
+            case 4: newSize = FRAMESIZE_SVGA; break;
+            case 5: newSize = FRAMESIZE_XGA; break;
+            case 6: newSize = FRAMESIZE_SXGA; break;
+            case 7: newSize = FRAMESIZE_UXGA; break;
+            default: newSize = currentFrameSize; break;
+          }
+          if (currentFrameSize != newSize) {
+            currentFrameSize = newSize;
+            Serial.println("\nResolution changed - reinitializing camera...");
+            Serial.flush();
+            esp_camera_deinit();
+            delay(100);
+            initCamera();
+            Serial.println("Resolution updated successfully!");
+            delay(200);
+          } else {
+            Serial.println("\nResolution unchanged.");
+            delay(200);
+          }
+        } else {
+          Serial.println("\nInvalid selection!");
+          delay(200);
+        }
+        settingsMenuState = 0;
+        Serial.println();
+        showSettingsMenu();
+        return;
+      }
+      
+      if (settingsMenuState == 2) { // Quality input - requires Enter to confirm
+        int quality = input.toInt();
+        if (quality >= 0 && quality <= 63) {
+          currentQuality = quality;
+          Serial.printf("\nJPEG Quality set to %d (lower = higher quality)\n", quality);
+          Serial.println("Note: Quality change will apply to next capture.");
+          delay(200);
+        } else {
+          Serial.println("\nInvalid quality! Must be between 0 and 63.");
+          delay(200);
+        }
+        settingsMenuState = 0;
+        Serial.println();
+        showSettingsMenu();
+        return;
+      }
+      
+      if (settingsMenuState == 3) { // Color format selection
+        int choice = input.toInt();
+        if (choice >= 0 && choice <= 2) {
+          pixformat_t newFormat;
+          switch(choice) {
+            case 0: newFormat = PIXFORMAT_JPEG; break;
+            case 1: newFormat = PIXFORMAT_GRAYSCALE; break;
+            case 2: newFormat = PIXFORMAT_RGB565; break;
+            default: newFormat = currentPixelFormat; break;
+          }
+          if (currentPixelFormat != newFormat) {
+            currentPixelFormat = newFormat;
+            Serial.println("\nColor format changed - reinitializing camera...");
+            Serial.flush();
+            esp_camera_deinit();
+            delay(100);
+            initCamera();
+            Serial.println("Color format updated successfully!");
+            delay(200);
+          } else {
+            Serial.println("\nColor format unchanged.");
+            delay(200);
+          }
+        } else {
+          Serial.println("\nInvalid selection!");
+          delay(200);
+        }
+        settingsMenuState = 0;
+        Serial.println();
+        showSettingsMenu();
+        return;
+      }
+      
+      if (settingsMenuState == 4) { // Endianness selection
+        int choice = input.toInt();
+        if (choice == 1) {
+          currentBigEndian = false;
+          Serial.println("\nEndianness set to Little Endian");
+          delay(200);
+        } else if (choice == 2) {
+          currentBigEndian = true;
+          Serial.println("\nEndianness set to Big Endian");
+          delay(200);
+        } else {
+          Serial.println("\nInvalid selection! Use 1 for Little Endian or 2 for Big Endian.");
+          delay(200);
+        }
+        settingsMenuState = 0;
+        Serial.println();
+        showSettingsMenu();
+        return;
+      }
+    }
+    
+    // Main command handling
     if (command == 'c' || command == 'C') {
       captureImage();
+    } else if (command == 'b' || command == 'B') {
+      // Burst capture: default 50 photos at 0.2 second intervals
+      int count = 50;
+      float interval = 0.2;
+      
+      Serial.printf("\n=== Starting Burst Capture ===\n");
+      Serial.printf("Count: %d photos\n", count);
+      Serial.printf("Interval: %.2f seconds\n", interval);
+      Serial.flush();
+      
+      burstInProgress = true;
+      burstCurrent = 0;
+      burstTotal = count;
+      
+      unsigned long intervalMs = (unsigned long)(interval * 1000);
+      
+      for (int i = 0; i < count; i++) {
+        burstCurrent = i + 1;
+        Serial.printf("\nBurst capture %d/%d\n", i + 1, count);
+        Serial.flush();
+        
+        captureImage();
+        
+        if (i < count - 1) {
+          unsigned long startTime = millis();
+          while (millis() - startTime < intervalMs) {
+            if (wifiConnected) {
+              server.handleClient();
+            }
+            delay(10);
+          }
+        }
+      }
+      
+      burstInProgress = false;
+      burstCurrent = 0;
+      burstTotal = 0;
+      
+      Serial.println("\n=== Burst Capture Complete ===");
+      Serial.flush();
     } else if (command == 'd' || command == 'D') {
       deleteAllImages();
     } else if (command == 'l' || command == 'L') {
       listImages();
+    } else if (command == 's' || command == 'S') {
+      settingsMenuState = 0;
+      showSettingsMenu();
     } else if (command == 'h' || command == 'H') {
-      Serial.println("\n=== Commands ===");
-      Serial.println("c - Capture image");
-      Serial.println("l - List all images");
-      Serial.println("d - Delete all images");
-      Serial.println("h - Show this help");
-      if (wifiConnected) {
-        Serial.printf("w - Web interface: http://%s\n", WiFi.localIP().toString().c_str());
-      }
+      showMainMenu();
     } else if (command == 'w' || command == 'W') {
       if (wifiConnected) {
         Serial.printf("\nWeb interface: http://%s\n", WiFi.localIP().toString().c_str());
         Serial.println("Or: http://xiaocamera.local");
       } else {
         Serial.println("WiFi not connected.");
+      }
+    } else if (settingsMenuState == 0 && (command == '1' || command == '2' || command == '3' || command == '4')) {
+      // Handle menu selection when in main settings menu
+      if (command == '1') {
+        settingsMenuState = 1;
+        showResolutionMenu();
+      } else if (command == '2') {
+        settingsMenuState = 2;
+        Serial.print("\nEnter JPEG Quality (0-63, lower=higher quality), then press Enter: ");
+        Serial.flush();
+      } else if (command == '3') {
+        settingsMenuState = 3;
+        showColorFormatMenu();
+      } else if (command == '4') {
+        settingsMenuState = 4;
+        showEndiannessMenu();
       }
     }
   }
@@ -651,6 +889,9 @@ void setupWebServer() {
   server.on("/setpixelformat", HTTP_POST, handleSetPixelFormat);
   server.on("/setendianness", HTTP_POST, handleSetEndianness);
   server.on("/getsettings", HTTP_GET, handleGetSettings);
+  // Backend burst endpoints (not exposed in web UI, but available for API use)
+  server.on("/burstcapture", HTTP_POST, handleBurstCapture);
+  server.on("/burststatus", HTTP_GET, handleBurstStatus);
   
   server.begin();
   Serial.println("HTTP server started");
@@ -699,12 +940,13 @@ void handleRoot() {
   html += "<label>Resolution: </label>";
   html += "<select id='resolutionSelect'>";
   html += "<option value='0'>96x96 (QQVGA 160x120)</option>";
-  html += "<option value='1'>240x240 (QVGA 320x240)</option>";
-  html += "<option value='2'>640x480 (VGA)</option>";
-  html += "<option value='3'>800x600 (SVGA)</option>";
-  html += "<option value='4'>1024x768 (XGA)</option>";
-  html += "<option value='5'>1280x1024 (SXGA)</option>";
-  html += "<option value='6'>1600x1200 (UXGA)</option>";
+  html += "<option value='1'>176x144 (QCIF)</option>";
+  html += "<option value='2'>240x240 (QVGA 320x240)</option>";
+  html += "<option value='3'>640x480 (VGA)</option>";
+  html += "<option value='4'>800x600 (SVGA)</option>";
+  html += "<option value='5'>1024x768 (XGA)</option>";
+  html += "<option value='6'>1280x1024 (SXGA)</option>";
+  html += "<option value='7'>1600x1200 (UXGA)</option>";
   html += "</select>";
   html += "<button onclick='changeResolution()'>Apply</button>";
   html += "</div>";
@@ -733,6 +975,11 @@ void handleRoot() {
   html += "<p style='font-size: 12px; color: #666; margin-top: 5px; margin-left: 0;'>";
   html += "Only applies to RGB565 format. Use Little Endian for ESP32/MicroPython. ";
   html += "Use Big Endian if your processing software requires it (e.g., some ML frameworks).";
+  html += "</p>";
+  html += "<p style='font-size: 12px; color: #666; margin-top: 5px; margin-left: 0;'>";
+  html += "<strong>Note:</strong> Burst capture (50 photos at 0.2 second intervals) is available via serial monitor using the <code>b</code> command. ";
+  html += "Burst photos are saved to SD card and use the current camera settings. ";
+  html += "Refreshing this page will show all pictures taken via serial monitor (including burst captures) in the gallery.";
   html += "</p>";
   html += "</div>";
   html += "</div>";
@@ -926,6 +1173,108 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
+void handleBurstCapture() {
+  if (!sdCardPresent) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"SD card required for burst capture\"}");
+    return;
+  }
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing parameters\"}");
+    return;
+  }
+  
+  String body = server.arg("plain");
+  
+  // Parse JSON manually (simple parsing)
+  int count = 50;
+  float interval = 0.2;
+  
+  // Extract count
+  int countIndex = body.indexOf("\"count\":");
+  if (countIndex >= 0) {
+    int countStart = body.indexOf(':', countIndex) + 1;
+    int countEnd = body.indexOf(',', countStart);
+    if (countEnd < 0) countEnd = body.indexOf('}', countStart);
+    if (countEnd > countStart) {
+      count = body.substring(countStart, countEnd).toInt();
+    }
+  }
+  
+  // Extract interval
+  int intervalIndex = body.indexOf("\"interval\":");
+  if (intervalIndex >= 0) {
+    int intervalStart = body.indexOf(':', intervalIndex) + 1;
+    int intervalEnd = body.indexOf('}', intervalStart);
+    if (intervalEnd > intervalStart) {
+      interval = body.substring(intervalStart, intervalEnd).toFloat();
+    }
+  }
+  
+  // Validate
+  if (count < 1 || count > 200) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Count must be between 1 and 200\"}");
+    return;
+  }
+  if (interval < 0.1 || interval > 5.0) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Interval must be between 0.1 and 5.0 seconds\"}");
+    return;
+  }
+  
+  // Send response immediately
+  server.send(200, "application/json", "{\"status\":\"ok\",\"count\":" + String(count) + ",\"interval\":" + String(interval) + "}");
+  
+  // Small delay to ensure response is sent
+  delay(10);
+  
+  // Set burst status
+  burstInProgress = true;
+  burstCurrent = 0;
+  burstTotal = count;
+  
+  // Perform burst capture
+  Serial.printf("\n=== Starting Burst Capture ===\n");
+  Serial.printf("Count: %d photos\n", count);
+  Serial.printf("Interval: %.2f seconds\n", interval);
+  Serial.flush();
+  
+  unsigned long intervalMs = (unsigned long)(interval * 1000);
+  
+  for (int i = 0; i < count; i++) {
+    burstCurrent = i + 1;
+    Serial.printf("\nBurst capture %d/%d\n", i + 1, count);
+    Serial.flush();
+    
+    captureImage();
+    
+    // Handle web server during delay to prevent timeout
+    if (i < count - 1) { // Don't delay after last capture
+      unsigned long startTime = millis();
+      while (millis() - startTime < intervalMs) {
+        if (wifiConnected) {
+          server.handleClient();
+        }
+        delay(10);
+      }
+    }
+  }
+  
+  burstInProgress = false;
+  burstCurrent = 0;
+  burstTotal = 0;
+  
+  Serial.println("\n=== Burst Capture Complete ===");
+  Serial.flush();
+}
+
+void handleBurstStatus() {
+  String json = "{";
+  json += "\"inProgress\":" + String(burstInProgress ? "true" : "false") + ",";
+  json += "\"current\":" + String(burstCurrent) + ",";
+  json += "\"total\":" + String(burstTotal);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
 void handleImage() {
   if (!server.hasArg("n")) {
     server.send(400, "text/plain", "Missing image number parameter");
@@ -1025,12 +1374,13 @@ void handleSetResolution() {
     
     switch(res) {
       case 0: newSize = FRAMESIZE_QQVGA; break;
-      case 1: newSize = FRAMESIZE_QVGA; break;
-      case 2: newSize = FRAMESIZE_VGA; break;
-      case 3: newSize = FRAMESIZE_SVGA; break;
-      case 4: newSize = FRAMESIZE_XGA; break;
-      case 5: newSize = FRAMESIZE_SXGA; break;
-      case 6: newSize = FRAMESIZE_UXGA; break;
+      case 1: newSize = FRAMESIZE_QCIF; break;
+      case 2: newSize = FRAMESIZE_QVGA; break;
+      case 3: newSize = FRAMESIZE_VGA; break;
+      case 4: newSize = FRAMESIZE_SVGA; break;
+      case 5: newSize = FRAMESIZE_XGA; break;
+      case 6: newSize = FRAMESIZE_SXGA; break;
+      case 7: newSize = FRAMESIZE_UXGA; break;
       default: 
         server.send(400, "application/json", "{\"status\":\"error\"}");
         return;
@@ -1101,12 +1451,13 @@ void handleSetEndianness() {
 void handleGetSettings() {
   int resValue = 0;
   if (currentFrameSize == FRAMESIZE_QQVGA) resValue = 0;
-  else if (currentFrameSize == FRAMESIZE_QVGA) resValue = 1;
-  else if (currentFrameSize == FRAMESIZE_VGA) resValue = 2;
-  else if (currentFrameSize == FRAMESIZE_SVGA) resValue = 3;
-  else if (currentFrameSize == FRAMESIZE_XGA) resValue = 4;
-  else if (currentFrameSize == FRAMESIZE_SXGA) resValue = 5;
-  else if (currentFrameSize == FRAMESIZE_UXGA) resValue = 6;
+  else if (currentFrameSize == FRAMESIZE_QCIF) resValue = 1;
+  else if (currentFrameSize == FRAMESIZE_QVGA) resValue = 2;
+  else if (currentFrameSize == FRAMESIZE_VGA) resValue = 3;
+  else if (currentFrameSize == FRAMESIZE_SVGA) resValue = 4;
+  else if (currentFrameSize == FRAMESIZE_XGA) resValue = 5;
+  else if (currentFrameSize == FRAMESIZE_SXGA) resValue = 6;
+  else if (currentFrameSize == FRAMESIZE_UXGA) resValue = 7;
   
   int pixelFormatValue = 0;
   if (currentPixelFormat == PIXFORMAT_JPEG) pixelFormatValue = 0;

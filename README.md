@@ -7,6 +7,8 @@ A complete photo capture system for the XIAO ESP32S3 Sense board with web server
 ## Features
 
 - **Multiple Capture Methods**: Button (D0), serial command, or web interface
+- **Burst Capture**: Take 50 photos rapidly at 0.2 second intervals via serial monitor (`b` command) - perfect for capturing facial expressions and fast-moving subjects
+- **Settings Menu**: Change camera settings (resolution, quality, color format, endianness) via serial monitor (`s` command)
 - **Web Gallery**: View all captured images with download and delete options
 - **Flexible Image Formats**: 
   - RGB (JPEG) - Standard color images
@@ -80,10 +82,51 @@ A complete photo capture system for the XIAO ESP32S3 Sense board with web server
 ### Serial Commands (115200 baud)
 
 - `c` - Capture image
+- `b` - Burst capture (50 photos at 0.2s intervals)
+- `s` - Settings menu (change resolution, quality, color format, endianness)
 - `d` - Delete all images
 - `l` - List all images
 - `h` - Show help
 - `w` - Display web interface URL
+
+#### Settings Menu (`s` command)
+
+Access the settings menu by typing `s` in the Serial Monitor. Navigate through the menu:
+
+1. **Resolution** - Select from 8 available resolutions:
+   - `0` - QQVGA (96x96 / 160x120)
+   - `1` - QCIF (176x144)
+   - `2` - QVGA (240x240 / 320x240)
+   - `3` - VGA (640x480)
+   - `4` - SVGA (800x600)
+   - `5` - XGA (1024x768)
+   - `6` - SXGA (1280x1024)
+   - `7` - UXGA (1600x1200)
+   
+   After selecting a resolution, the camera will reinitialize automatically. You'll return to the settings menu.
+
+2. **JPEG Quality** - Enter a value from 0-63 (lower = higher quality), then press Enter
+   - Lower values (0-10) = Higher quality, larger file sizes
+   - Higher values (50-63) = Lower quality, smaller file sizes
+   - Default: 12
+   - Changes apply to the next capture
+
+3. **Color Format** - Choose from 3 formats:
+   - `0` - RGB (JPEG) - Standard color images, most common format
+   - `1` - Grayscale - Black and white JPEG images, smaller file sizes
+   - `2` - RGB565 - 16-bit color format, useful for machine learning applications
+   
+   After selecting a format, the camera will reinitialize automatically. You'll return to the settings menu.
+
+4. **Endianness** - Select byte order for RGB565 format:
+   - `1` - Little Endian (default, recommended for ESP32/MicroPython)
+   - `2` - Big Endian (use if your processing software requires it)
+   
+   Only applies when Color Format is set to RGB565 (option 2).
+
+5. **c - Take a new photo and continue** - Capture an image and remain in the settings menu
+   - Useful for testing settings changes without exiting the menu
+   - Photo is saved to SD card with current settings
 
 ### Web Interface
 
@@ -92,33 +135,47 @@ Access via IP address (shown in Serial Monitor) or `http://xiaocamera.local`
 **Features:**
 - **Latest Image**: Displays most recently captured image
 - **Camera Settings**: 
-  - Resolution: 96x96 to 1600x1200
+  - Resolution: QQVGA (96x96), QCIF (176x144), QVGA (240x240), VGA (640x480), SVGA (800x600), XGA (1024x768), SXGA (1280x1024), UXGA (1600x1200)
   - JPEG Quality: 0-63 slider (lower = higher quality)
   - Color Format: RGB (JPEG), Grayscale, RGB565
   - Endianness: Little Endian or Big Endian (for RGB565)
-- **Capture**: Take new photos
+- **Capture**: Take single photos (saved to SD card and can be downloaded from browser)
 - **Gallery**: View all captured images with thumbnails
-- **Download**: Download individual images or all images as ZIP
+- **Download**: Download individual images or all images
 - **Delete**: Remove all images
+- **Note**: Burst capture (50 photos at 0.2s intervals) is available via serial monitor using the `b` command. Burst photos are saved to SD card and use the current camera settings. Refreshing the web page will show all pictures taken via serial monitor (including burst captures) in the gallery.
 
 ### Camera Settings Explained
 
 - **Resolution**: 
-  - QQVGA (96x96), QVGA (240x240), VGA (640x480)
-  - SVGA (800x600), XGA (1024x768), SXGA (1280x1024), UXGA (1600x1200)
+  - QQVGA (96x96 / 160x120) - Smallest, fastest, lowest memory usage
+  - QCIF (176x144) - Compact size, good for quick captures
+  - QVGA (240x240 / 320x240) - Balanced quality and speed
+  - VGA (640x480) - Standard resolution, good for most uses
+  - SVGA (800x600) - Higher quality, larger files
+  - XGA (1024x768) - High resolution
+  - SXGA (1280x1024) - Very high resolution
+  - UXGA (1600x1200) - Maximum resolution, largest files
   
+  **Note**: Resolution can be changed via both the web interface and serial monitor settings menu (`s` command). Higher resolutions require more memory and processing time. After changing resolution in the settings menu, the camera automatically reinitializes.
+
 - **JPEG Quality**: 0-63 (lower numbers = higher quality, larger files)
   - Default: 12 (good balance)
+  - Lower values (0-10) = Higher quality, larger file sizes
+  - Higher values (50-63) = Lower quality, smaller file sizes
+  - Changes apply to the next capture
   - For high-resolution captures, quality is automatically optimized
 
 - **Color Format**:
-  - **RGB (JPEG)**: Standard color images, fastest capture
-  - **Grayscale**: Black and white images, saved as grayscale JPEG
-  - **RGB565**: 16-bit color format, useful for ML/computer vision applications
+  - **RGB (JPEG)** (option 0): Standard color images, fastest capture, most common format
+  - **Grayscale** (option 1): Black and white images, saved as grayscale JPEG, smaller file sizes
+  - **RGB565** (option 2): 16-bit color format, useful for ML/computer vision applications
+  
+  After changing color format in the settings menu, the camera automatically reinitializes.
 
 - **Endianness**: Only applies to RGB565 format
-  - **Little Endian**: Default for ESP32/MicroPython
-  - **Big Endian**: Use if your processing software requires it (e.g., some ML frameworks)
+  - **Little Endian** (option 1): Default, recommended for ESP32/MicroPython
+  - **Big Endian** (option 2): Use if your processing software requires it (e.g., some ML frameworks)
 
 ## File Format
 
