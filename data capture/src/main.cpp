@@ -27,8 +27,8 @@
 
 #define SD_CS_PIN         21
 
-const char* ssid = "LowHangingFruit";
-const char* password = "FatHangingFruit";
+const char* ssid = "YOUR_WIFI_NETWORK_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 WebServer server(80);
 camera_config_t config;
